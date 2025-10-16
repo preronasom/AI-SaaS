@@ -1,1 +1,2 @@
-.envnode_modules/dist/
+.envnode_modules/dist/client/.env
+.env
