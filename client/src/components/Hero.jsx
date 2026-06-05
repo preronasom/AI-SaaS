@@ -26,9 +26,6 @@ const Hero = () => {
           >
             <Sparkles size={18} /> Launch AI Studio
           </button>
-          <button className="bg-white border border-gray-300 px-6 py-3 rounded-xl hover:shadow transition hover:scale-[1.02]">
-            Live Demo
-          </button>
         </div>
 
         {/* Badge section */}

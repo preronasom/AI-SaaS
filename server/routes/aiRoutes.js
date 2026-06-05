@@ -1,5 +1,8 @@
 import express from "express";
 import { auth } from "../middlewares/auth.js";
+import { getPublishedCreations } from "../controllers/aiController.js";
+import { getUserCreations } from "../controllers/aiController.js";
+import { toggleLike } from "../controllers/aiController.js";
 import {
     generateArticle,
     generateBlogTitle,
@@ -22,4 +25,9 @@ aiRouter.post("/remove-image-object", auth, upload.single("image"), removeImageO
 
 aiRouter.post("/resume-review", auth, upload.single("resume"), resumeReview);
 
+aiRouter.post("/toggle-like", auth, toggleLike);
+
+
+aiRouter.get("/user-creations", auth, getUserCreations);
+aiRouter.get("/creations", auth, getPublishedCreations);
 export default aiRouter;

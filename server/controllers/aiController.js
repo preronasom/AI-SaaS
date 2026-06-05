@@ -1,18 +1,15 @@
-import OpenAI from "openai";
 import sql from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
 import axios from "axios";
 import { v2 as cloudinary } from 'cloudinary'
 import fs from "fs";
 import pdf from "pdf-parse/lib/pdf-parse.js";
-import FormData from "form-data";
+import Groq from "groq-sdk";
+import { HfInference } from "@huggingface/inference";
 
-const AI = new OpenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
-});
-
-
+const hf = new HfInference(process.env.HUGGINGFACE_API_KEY);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+console.log("HF Key Loaded:", !!process.env.HUGGINGFACE_API_KEY);
 export const generateArticle = async (req, res) => {
     try {
         const { userId } = req.auth();
@@ -24,39 +21,30 @@ export const generateArticle = async (req, res) => {
             return res.json({ success: false, message: "Limit reached. Upgrade to continue." })
         }
 
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.0-flash",
-            messages: [{
-                role: "user",
-                content: prompt,
-            },
-            ],
-            temperature: 0.7,
-            max_tokens: length,
+        const completion = await groq.chat.completions.create({
+            model: "openai/gpt-oss-120b",
+            messages: [{ role: "user", content: prompt }],
         });
+        const content = completion.choices[0].message.content;
 
-        const content = response.choices[0].message.content
-
-        await sql` INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article');`;
+        await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article')`;
 
         if (plan !== 'premium') {
             await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: {
-                    free_usage: free_usage + 1
-                }
+                privateMetadata: { free_usage: free_usage + 1 }
             })
         }
 
         res.json({
             success: true,
             message: "Article generated successfully",
-            content: content,
+            content,
             usage: plan !== 'premium' ? free_usage + 1 : 'unlimited'
         });
 
     } catch (error) {
-        console.log(error.message)
-        res.json({ success: false, message: error.message })
+        console.error("Error:", error.message);
+        res.json({ success: false, message: error.message });
     }
 }
 
@@ -71,33 +59,24 @@ export const generateBlogTitle = async (req, res) => {
             return res.json({ success: false, message: "Limit reached. Upgrade to continue." })
         }
 
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.0-flash",
-            messages: [{
-                role: "user",
-                content: prompt,
-            },
-            ],
-            temperature: 0.7,
-            max_tokens: 100,
+        const completion = await groq.chat.completions.create({
+            model: "openai/gpt-oss-120b",
+            messages: [{ role: "user", content: prompt }],
         });
+        const content = completion.choices[0].message.content;
 
-        const content = response.choices[0].message.content
-
-        await sql` INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-title');`;
+        await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-title')`;
 
         if (plan !== 'premium') {
             await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: {
-                    free_usage: free_usage + 1
-                }
+                privateMetadata: { free_usage: free_usage + 1 }
             })
         }
 
         res.json({
             success: true,
             message: "Blog generated successfully",
-            content: content,
+            content,
             usage: plan !== 'premium' ? free_usage + 1 : 'unlimited'
         });
 
@@ -107,43 +86,46 @@ export const generateBlogTitle = async (req, res) => {
     }
 }
 
-
 export const generateImage = async (req, res) => {
     try {
         const { userId } = req.auth();
         const { prompt, publish } = req.body;
-        const plan = req.plan;
 
-        if (plan !== 'premium') {
-            return res.json({ success: false, message: "This feature is only available for premium subscriptions." })
-        }
+        const image = await hf.textToImage({
+            model: "stabilityai/stable-diffusion-xl-base-1.0",
+            inputs: prompt,
+        });
 
-        const formData = new FormData()
-        formData.append('prompt', prompt)
-        const { data } = await axios.post("https://clipdrop-api.co/text-to-image/v1", formData, {
-            headers: { 'x-api-key': process.env.CLIPDROP_API_KEY },
-            responseType: "arraybuffer",
-        })
+        const buffer = Buffer.from(await image.arrayBuffer());
 
-        const base64Image = `data:image/png;base64,${Buffer.from(data, 'binary').toString('base64')}`;
+        fs.writeFileSync("temp.png", buffer);
 
-        const { secure_url } = await cloudinary.uploader.upload(base64Image)
+        const uploadResult = await cloudinary.uploader.upload(
+            "temp.png"
+        );
 
-        await sql` INSERT INTO creations (user_id, prompt, content, type, publish) VALUES (${userId}, ${prompt}, ${secure_url}, 'image', ${publish ?? false})
-        `;
+        fs.unlinkSync("temp.png");
+
+        await sql`
+      INSERT INTO creations
+      (user_id,prompt,content,type,publish)
+      VALUES
+      (${userId},${prompt},${uploadResult.secure_url},'image',${publish})
+    `;
 
         res.json({
             success: true,
-            content: secure_url,
-            message: "Image generated successfully"
+            content: uploadResult.secure_url
         });
 
     } catch (error) {
-        console.log(error.message)
-        res.json({ success: false, message: error.message })
+        console.log(error);
+        res.json({
+            success: false,
+            message: error.message
+        });
     }
-}
-
+};
 
 export const removeImageBackground = async (req, res) => {
     try {
@@ -155,24 +137,13 @@ export const removeImageBackground = async (req, res) => {
             return res.json({ success: false, message: "This feature is only available for premium subscriptions." })
         }
 
-
         const { secure_url } = await cloudinary.uploader.upload(image.path, {
-            transformation: [
-                {
-                    effect: 'background_removal',
-                    background_removal: 'remove_the_background'
-                }
-            ]
+            transformation: [{ effect: 'background_removal' }]
         })
 
-        await sql` INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')
-        `;
+        await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')`;
 
-        res.json({
-            success: true,
-            content: secure_url,
-            message: "Remove background successfully"
-        });
+        res.json({ success: true, content: secure_url, message: "Remove background successfully" });
 
     } catch (error) {
         console.log(error.message)
@@ -198,14 +169,9 @@ export const removeImageObject = async (req, res) => {
             resource_type: 'image'
         })
 
-        await sql` INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${`Removed ${object} from image`}, ${imageUrl}, 'image')
-        `;
+        await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${`Removed ${object} from image`}, ${imageUrl}, 'image')`;
 
-        res.json({
-            success: true,
-            content: imageUrl,
-            message: "Remove object successfully"
-        });
+        res.json({ success: true, content: imageUrl, message: "Remove object successfully" });
 
     } catch (error) {
         console.log(error.message)
@@ -232,30 +198,77 @@ export const resumeReview = async (req, res) => {
 
         const prompt = `Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement. Resume Content:\n\n${pdfData.text}`
 
-        const response = await AI.chat.completions.create({
-            model: "gemini-2.0-flash",
-            messages: [{
-                role: "user",
-                content: prompt,
-            },
-            ],
-            temperature: 0.7,
-            max_tokens: 1000,
+        const completion = await groq.chat.completions.create({
+            model: "openai/gpt-oss-120b",
+            messages: [{ role: "user", content: prompt }],
         });
+        const content = completion.choices[0].message.content;
 
-        const content = response.choices[0].message.content
+        await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Review the uploaded resume', ${content}, 'resume-review')`;
 
-        await sql` INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, 'Review the uploaded resume', ${content}, 'resume-review')
-        `;
-
-        res.json({
-            success: true,
-            content,
-            message: "Review resume successfully"
-        });
+        res.json({ success: true, content, message: "Review resume successfully" });
 
     } catch (error) {
         console.log(error.message)
         res.json({ success: false, message: error.message })
+    }
+}
+
+export const getPublishedCreations = async (req, res) => {
+    try {
+        const creations = await sql`
+            SELECT c.*, COALESCE(
+                json_agg(l.user_id) FILTER (WHERE l.user_id IS NOT NULL), '[]'
+            ) as likes
+            FROM creations c
+            LEFT JOIN likes l ON c.id = l.creation_id
+            WHERE c.publish = true AND c.type = 'image'
+            GROUP BY c.id
+            ORDER BY c.created_at DESC
+        `;
+        res.json({ success: true, creations });
+    } catch (error) {
+        console.log(error.message);
+        res.json({ success: false, message: error.message });
+    }
+}
+
+export const getUserCreations = async (req, res) => {
+    try {
+        const { userId } = req.auth();
+        const creations = await sql`
+            SELECT * FROM creations 
+            WHERE user_id = ${userId}
+            ORDER BY created_at DESC
+        `;
+        res.json({ success: true, creations });
+    } catch (error) {
+        console.log(error.message);
+        res.json({ success: false, message: error.message });
+    }
+}
+
+export const toggleLike = async (req, res) => {
+    try {
+        const { userId } = req.auth();
+        const { creationId } = req.body;
+
+        const existing = await sql`
+            SELECT * FROM likes WHERE user_id = ${userId} AND creation_id = ${creationId}
+        `;
+
+        if (existing.length > 0) {
+            await sql`DELETE FROM likes WHERE user_id = ${userId} AND creation_id = ${creationId}`;
+        } else {
+            await sql`INSERT INTO likes (user_id, creation_id) VALUES (${userId}, ${creationId})`;
+        }
+
+        const likes = await sql`SELECT user_id FROM likes WHERE creation_id = ${creationId}`;
+
+        res.json({ success: true, likes: likes.map(l => l.user_id) });
+
+    } catch (error) {
+        console.log(error.message);
+        res.json({ success: false, message: error.message });
     }
 }
