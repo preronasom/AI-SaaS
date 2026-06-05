@@ -12,7 +12,7 @@ connectCloudinary()
 app.use(cors({
     origin: [
         'http://localhost:5173',
-        'https://stunning-tanuki-6c95b2.netlify.app'
+        'https://quickai-6c95b2.netlify.app/'
     ]
 }));
 app.use(express.json());
