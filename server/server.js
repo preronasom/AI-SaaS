@@ -9,8 +9,12 @@ import userRouter from './routes/userRoutes.js';
 const app = express();
 
 connectCloudinary()
-
-app.use(cors());
+app.use(cors({
+    origin: [
+        'http://localhost:5173',
+        'https://stunning-tanuki-6c95b2.netlify.app'
+    ]
+}));
 app.use(express.json());
 
 
