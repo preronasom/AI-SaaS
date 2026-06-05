@@ -9,12 +9,15 @@ import userRouter from './routes/userRoutes.js';
 const app = express();
 
 connectCloudinary()
+
+
 app.use(cors({
     origin: [
         'http://localhost:5173',
-        'https://quickai-6c95b2.netlify.app/'
+        'https://quickai-6c95b2.netlify.app'  // ✅ must match exactly
     ]
 }));
+
 app.use(express.json());
 
 
