@@ -1,6 +1,5 @@
 import sql from "../configs/db.js";
 import { clerkClient } from "@clerk/express";
-import axios from "axios";
 import { v2 as cloudinary } from 'cloudinary'
 import fs from "fs";
 import pdf from "pdf-parse/lib/pdf-parse.js";
@@ -9,37 +8,24 @@ import { HfInference } from "@huggingface/inference";
 
 const hf = new HfInference(process.env.HUGGINGFACE_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-console.log("HF Key Loaded:", !!process.env.HUGGINGFACE_API_KEY);
+
 export const generateArticle = async (req, res) => {
     try {
         const { userId } = req.auth();
         const { prompt, length } = req.body;
-        const plan = req.plan;
-        const free_usage = req.free_usage;
-
-        if (plan !== 'premium' && free_usage >= 10) {
-            return res.json({ success: false, message: "Limit reached. Upgrade to continue." })
-        }
 
         const completion = await groq.chat.completions.create({
-            model: "openai/gpt-oss-120b",
+            model: "llama3-70b-8192",
             messages: [{ role: "user", content: prompt }],
         });
         const content = completion.choices[0].message.content;
 
         await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'article')`;
 
-        if (plan !== 'premium') {
-            await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: { free_usage: free_usage + 1 }
-            })
-        }
-
         res.json({
             success: true,
             message: "Article generated successfully",
             content,
-            usage: plan !== 'premium' ? free_usage + 1 : 'unlimited'
         });
 
     } catch (error) {
@@ -52,32 +38,19 @@ export const generateBlogTitle = async (req, res) => {
     try {
         const { userId } = req.auth();
         const { prompt } = req.body;
-        const plan = req.plan;
-        const free_usage = req.free_usage;
-
-        if (plan !== 'premium' && free_usage >= 10) {
-            return res.json({ success: false, message: "Limit reached. Upgrade to continue." })
-        }
 
         const completion = await groq.chat.completions.create({
-            model: "openai/gpt-oss-120b",
+            model: "llama3-70b-8192",
             messages: [{ role: "user", content: prompt }],
         });
         const content = completion.choices[0].message.content;
 
         await sql`INSERT INTO creations (user_id, prompt, content, type) VALUES (${userId}, ${prompt}, ${content}, 'blog-title')`;
 
-        if (plan !== 'premium') {
-            await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: { free_usage: free_usage + 1 }
-            })
-        }
-
         res.json({
             success: true,
             message: "Blog generated successfully",
             content,
-            usage: plan !== 'premium' ? free_usage + 1 : 'unlimited'
         });
 
     } catch (error) {
@@ -97,45 +70,26 @@ export const generateImage = async (req, res) => {
         });
 
         const buffer = Buffer.from(await image.arrayBuffer());
-
         fs.writeFileSync("temp.png", buffer);
 
-        const uploadResult = await cloudinary.uploader.upload(
-            "temp.png"
-        );
-
+        const uploadResult = await cloudinary.uploader.upload("temp.png");
         fs.unlinkSync("temp.png");
 
-        await sql`
-      INSERT INTO creations
-      (user_id,prompt,content,type,publish)
-      VALUES
-      (${userId},${prompt},${uploadResult.secure_url},'image',${publish})
-    `;
+        await sql`INSERT INTO creations (user_id, prompt, content, type, publish) 
+                  VALUES (${userId}, ${prompt}, ${uploadResult.secure_url}, 'image', ${publish ?? false})`;
 
-        res.json({
-            success: true,
-            content: uploadResult.secure_url
-        });
+        res.json({ success: true, content: uploadResult.secure_url });
 
     } catch (error) {
-        console.log(error);
-        res.json({
-            success: false,
-            message: error.message
-        });
+        console.log(error.message);
+        res.json({ success: false, message: error.message });
     }
-};
+}
 
 export const removeImageBackground = async (req, res) => {
     try {
         const { userId } = req.auth();
         const image = req.file;
-        const plan = req.plan;
-
-        if (plan !== 'premium') {
-            return res.json({ success: false, message: "This feature is only available for premium subscriptions." })
-        }
 
         const { secure_url } = await cloudinary.uploader.upload(image.path, {
             transformation: [{ effect: 'background_removal' }]
@@ -156,11 +110,6 @@ export const removeImageObject = async (req, res) => {
         const { userId } = req.auth();
         const { object } = req.body;
         const image = req.file;
-        const plan = req.plan;
-
-        if (plan !== 'premium') {
-            return res.json({ success: false, message: "This feature is only available for premium subscriptions." })
-        }
 
         const { public_id } = await cloudinary.uploader.upload(image.path)
 
@@ -183,11 +132,6 @@ export const resumeReview = async (req, res) => {
     try {
         const { userId } = req.auth();
         const resume = req.file;
-        const plan = req.plan;
-
-        if (plan !== 'premium') {
-            return res.json({ success: false, message: "This feature is only available for premium subscriptions." })
-        }
 
         if (resume.size > 5 * 1024 * 1024) {
             return res.json({ success: false, message: "Resume file size exceeds allowed size (5MB)." })
@@ -199,7 +143,7 @@ export const resumeReview = async (req, res) => {
         const prompt = `Review the following resume and provide constructive feedback on its strengths, weaknesses, and areas for improvement. Resume Content:\n\n${pdfData.text}`
 
         const completion = await groq.chat.completions.create({
-            model: "openai/gpt-oss-120b",
+            model: "llama3-70b-8192",
             messages: [{ role: "user", content: prompt }],
         });
         const content = completion.choices[0].message.content;
